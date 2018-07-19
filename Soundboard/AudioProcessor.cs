@@ -7,7 +7,8 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using NAudio.CoreAudioApi;
 using NAudio.Dmo;
-
+using NAudio.Wave;
+using System.Diagnostics;
 
 namespace Soundboard
 {
@@ -58,69 +59,58 @@ namespace Soundboard
         }
     }
     public class Channel : List<Sample> { }
+    public class SampleQueue : Queue<Sample> { }
     public class Complex
     {
-        private double real;
-        private double imaginary;
-        private double magnitude;
+        public double Real { get; set; }
+        public double Imaginary { get; set; }
 
         public Complex()
         {
-            real = 0;
-            imaginary = 0;
-            magnitude = 0;
+            Real = 0;
+            Imaginary = 0;
         }
 
-        public Complex(double r, double i)
+        public Complex(double real, double imaginary)
         {
-            real = r;
-            imaginary = i;
-            magnitude = real * real + imaginary * imaginary;
+            Real = real;
+            Imaginary = imaginary;
         }
 
-        public void Set(double r, double i)
+        public static Complex operator *(Complex a, Complex b)
         {
-            real = r;
-            imaginary = i;
-            magnitude = real * real + imaginary * imaginary;
+            return new Complex((a.Real * b.Real - a.Imaginary * b.Imaginary), (a.Real * b.Imaginary + a.Imaginary * b.Real));
         }
 
-        public void SetRealPart(double r)
+        public static Complex operator +(Complex a, Complex b)
         {
-            real = r;
-            magnitude = real * real + imaginary * imaginary;
+            return new Complex((a.Real + b.Real), (a.Imaginary + b.Imaginary));
         }
 
-        public void SetImagninaryPart(double i)
+        public static Complex operator -(Complex a, Complex b)
         {
-            imaginary = i;
-            magnitude = real * real + imaginary * imaginary;
+            return new Complex((a.Real - b.Real), (a.Imaginary - b.Imaginary));
         }
 
-        public void GetRealPart(out double r)
+        public override string ToString()
         {
-            r = real;
+            return ("Real: " + Real + " Imaginary: " + Imaginary);
         }
-
-        public void GetImaginaryPart(out double i)
-        {
-            i = imaginary;
-        }
-
         public double Magnitude()
         {
-            return Math.Sqrt(magnitude);
+            return Math.Sqrt(SquaredMagnitude());
         }
 
         public double SquaredMagnitude()
         {
-            return magnitude;
+            return Real * Real + Imaginary * Imaginary;
         }
     }
 
     public class Audio
     {
-        private static readonly double PI = 3.14159;
+        private static readonly double PI = 3.14159265259;
+        private static readonly int NUM_SAMPLES_TO_PROCESS = 4096; // The nummber of sample to wait for before processing
 
         private MMDeviceEnumerator deviceEnumerator;
         private MMDevice microphone;
@@ -136,7 +126,7 @@ namespace Soundboard
 
         private Guid audioSession;
 
-        private double pitchScale;
+        public double PitchFactor { get; set; }
         
         public Audio()
         {
@@ -149,7 +139,7 @@ namespace Soundboard
             micFrameSize = 0;
             speakFrameSize = 0;
             audioSession = new Guid();
-            pitchScale = 2;
+            PitchFactor = 1;
         }
 
         public void GetMicrophones(List<MMDevice> deviceNames)
@@ -160,7 +150,6 @@ namespace Soundboard
                 deviceNames.Add(i);
             }
         }
-
         public void GetSpeakers(List<MMDevice> deviceNames)
         {
             MMDeviceCollection deviceCollection = deviceEnumerator.EnumerateAudioEndPoints(NAudio.CoreAudioApi.DataFlow.Render, NAudio.CoreAudioApi.DeviceState.Active);
@@ -169,7 +158,6 @@ namespace Soundboard
                 deviceNames.Add(i);
             }
         }
-
         public void SetMicrophone(MMDevice mic)
         {
             microphone = mic;
@@ -183,7 +171,6 @@ namespace Soundboard
             Console.WriteLine("INFO: Microphone Buffer size " + bufferSize.ToString() + " Frame size " + micFrameSize.ToString());
             Console.WriteLine("INFO: Microphone wave format " + waveFormat.ToString());
         }
-
         public void SetSpeaker(MMDevice speak)
         {
             speaker = speak;
@@ -201,138 +188,126 @@ namespace Soundboard
             Console.WriteLine("INFO: Speaker wave format " + waveFormat.ToString() + " encoding " + waveFormat.Encoding);
         }
 
-        public double GetPitchScale()
-        {
-            return pitchScale;
-        }
-
-        public void SetPitchScale(double p)
-        {
-            pitchScale = p;
-        }
-
         public void StartCapture()
         {
             micAudioClient.Start();
             speakAudioClient.Start();
 
+            BenchmarkFFT(1);
+
             cancelTokenSource = new CancellationTokenSource();
             captureTask = new Task(GetCaptureData, cancelTokenSource.Token);
             captureTask.Start();
+        }
+        public void StopCapture()
+        {
+            cancelTokenSource.Cancel();
+
+            captureTask.Wait(); // Wait for task to finish
+            micAudioClient.Stop();
+            speakAudioClient.Stop();
+            captureTask.Dispose();
         }
 
         public void GetCaptureData()
         {
             int numChannels = micAudioClient.MixFormat.Channels;
-            List<Channel> channels = new List<Channel>(numChannels);
+            List<SampleQueue> micData = new List<SampleQueue>(numChannels);
             for (int i = 0; i < numChannels; ++i)
             {
-                channels.Add(new Channel());
+                micData.Add(new SampleQueue());
             }
+
+            // Check for speaker supported format
+            if (!(speakAudioClient.MixFormat.Encoding == WaveFormatEncoding.Extensible &&
+                ((WaveFormatExtensible)micAudioClient.MixFormat).SubFormat.Equals(new Guid("00000003-0000-0010-8000-00aa00389b71"))))
+            {
+                throw new Exception("Capture format not supported." + micAudioClient.MixFormat.Encoding.ToString());
+            }
+            // Check for microphone supported format
+            if (!(micAudioClient.MixFormat.Encoding == WaveFormatEncoding.Extensible &&
+                ((WaveFormatExtensible)micAudioClient.MixFormat).SubFormat.Equals(new Guid("00000003-0000-0010-8000-00aa00389b71"))))
+            {
+                throw new Exception("Capture format not supported." + micAudioClient.MixFormat.Encoding.ToString());
+            }
+
             while (!cancelTokenSource.Token.IsCancellationRequested)
             {
+                // Capture data ========================================================================================================
                 int nextPacketSize = micAudioClient.AudioCaptureClient.GetNextPacketSize();
-                while (nextPacketSize != 0)
+                if (nextPacketSize != 0)
                 {
+                    int framesCaptured = micData[0].Count;
+                    while (framesCaptured < NUM_SAMPLES_TO_PROCESS)
+                    {
+                        unsafe
+                        {
+                            // Read Frames from microphone
+                            void* pData = micAudioClient.AudioCaptureClient.GetBuffer(out int numFrames, out AudioClientBufferFlags buffFlags, out long devicePosition, out long qpcPosition).ToPointer();
+                            for (int frame = 0; frame < numFrames; ++frame)
+                            {
+                                for (int channel = 0; channel < numChannels; ++channel)
+                                {
+                                    Sample sample = new Sample((byte*)pData, micAudioClient.MixFormat.BitsPerSample);
+                                    pData = (byte*)pData + micAudioClient.MixFormat.BlockAlign;
+                                    micData.ElementAt(channel).Enqueue(sample);
+                                }
+                                ++framesCaptured;
+                            }
+                            micAudioClient.AudioCaptureClient.ReleaseBuffer(numFrames);
+                        }
+                    }
+
+                    // Process audio ===========================================================================================================
+
+                    // Only process the first NUM_SAMPLES_TO_PROCESS
+                    List<Channel> speakData = new List<Channel>();
+                    foreach (var ch in micData)
+                    {
+                        speakData.Add(new Channel());
+                        for (int i = 0; i < NUM_SAMPLES_TO_PROCESS; ++i)
+                        {
+                            speakData[speakData.Count - 1].Add(ch.Dequeue());
+                        }
+                    }
+
+                    // Combine all channels into a single channel
+                    speakData = ModifyChannels(speakData, 1);
+                    Channel processData = speakData[0];
+
+
+                    FFT(processData, out Complex[] frequencies);
+
+                    PrintHighestFrequency(ref frequencies, micAudioClient.MixFormat.SampleRate);
+
+                    IFFT(frequencies, out Channel IFFTsamples);
+
+                    // Modify Speaker data to correct number of channels
+                    speakData[0] = processData;
+                    speakData = ModifyChannels(speakData, speakAudioClient.MixFormat.Channels);
+
+                    // Write data ====================================================================================================================
+                    int framesRequested = speakData.ElementAt(0).Count;
                     unsafe
                     {
-                        // Read Frames from microphone
-                        void* pData = micAudioClient.AudioCaptureClient.GetBuffer(out int numFrames, out AudioClientBufferFlags buffFlags, out long devicePosition, out long qpcPosition).ToPointer();
-                        for (int frame = 0; frame < numFrames; ++frame) // For every frame available
-                        {
-                            for (int channel = 0; channel < numChannels; ++channel) // For every Channel
-                            {   
-                                if (micAudioClient.MixFormat.Encoding == NAudio.Wave.WaveFormatEncoding.Extensible)
-                                {
-                                    switch (((NAudio.Wave.WaveFormatExtensible)micAudioClient.MixFormat).SubFormat.ToString())
-                                    {
-                                        case "00000003-0000-0010-8000-00aa00389b71": // Corresponds to WAVE_FORMAT_IEEE_FLOAT 
-
-                                            Sample sample = new Sample((byte*)pData, micAudioClient.MixFormat.BitsPerSample);
-                                            pData = (byte*)pData + micAudioClient.MixFormat.BlockAlign;
-                                            channels.ElementAt(channel).Add(sample);
-                                            break;
-                                        default:
-                                            throw new Exception("Capture format not supported." + micAudioClient.MixFormat.Encoding.ToString());
-                                    }
-                                }
- 
-                            }
-                       
-                        }
-                        micAudioClient.AudioCaptureClient.ReleaseBuffer(numFrames);
-                        List<Channel> speakData = channels;
-                        DFT(channels.ElementAt(0), micAudioClient.MixFormat.SampleRate);
-
-                        //speakData = PitchScale(channels, 2.0f);
-
-                        // Modify input channels to output channels
-                        speakData = ModifyChannels(speakData, speakAudioClient.MixFormat.Channels);
-
-                        // Resample
-                        // speakData = Resample(speakData, (uint)(speakData.ElementAt(0).Count * 1.5));
-
-                        
-
-                        // Check if data is well formed
-                        // TODO
-                        if (speakData.Count == 0)
-                        {
-                            Console.WriteLine("Attempted to output data with 0 channels.");
-                            continue;
-                        }
-
-
-                        // Write Frames to speakers
-
-                        int framesRequested = speakData.ElementAt(0).Count;
-                        pData = speakAudioClient.AudioRenderClient.GetBuffer(framesRequested).ToPointer();
+                        void* pData = speakAudioClient.AudioRenderClient.GetBuffer(framesRequested).ToPointer();
                         for (int frame = 0; frame < framesRequested; ++frame)
                         {
                             foreach (var ch in speakData)
                             {
-                                if (speakAudioClient.MixFormat.Encoding == NAudio.Wave.WaveFormatEncoding.Extensible)
-                                {
-                                    switch (((NAudio.Wave.WaveFormatExtensible)speakAudioClient.MixFormat).SubFormat.ToString())
-                                    {
-                                        case "00000003-0000-0010-8000-00aa00389b71": // Corresponds to WAVE_FORMAT_IEEE_FLOAT 
-                                            *(float*)pData = ch.ElementAt(frame).ToFloat();
-                                            pData = (float*)pData + 1;
-                                            break;
-                                        default:
-                                            throw new Exception("Render format not supported.");
-                                    }
-                                }
-                                else
-                                {
-                                    throw new Exception("Render format not supported.");
-                                }
+                                *(float*)pData = ch.ElementAt(frame).ToFloat();
+                                pData = (float*)pData + 1;
                             }
                         }
-                        speakAudioClient.AudioRenderClient.ReleaseBuffer(framesRequested, AudioClientBufferFlags.None);
-
-                        // Clear data
-                        foreach (var channel in channels)
-                        {
-                            channel.Clear();
-                        }
                     }
-
-                    nextPacketSize = micAudioClient.AudioCaptureClient.GetNextPacketSize();
+                    speakAudioClient.AudioRenderClient.ReleaseBuffer(framesRequested, AudioClientBufferFlags.None);
                 }
-                Thread.Sleep(1);
+                else
+                {
+                    // maybe wait
+                    Thread.Sleep(1);
+                }        
             }
-        }
-
-        public void StopCapture()
-        {
-            cancelTokenSource.Cancel();
-            micAudioClient.Stop();
-            speakAudioClient.Stop();
-
-
-            captureTask.Wait(); // Wait for task to finish
-            captureTask.Dispose();         
         }
 
         private List<Channel> Resample(List<Channel> data, uint numSamples)
@@ -342,6 +317,12 @@ namespace Soundboard
                 throw new Exception("Can not resample to have 0 samples.");
             }
             //TODO: check if data is well formed
+
+            // Check if we need to do anything
+            if (data[0].Count == numSamples)
+            {
+                return data;
+            }
 
             List<Channel> returnData = new List<Channel>();
             foreach(var ch in data) // For every channel
@@ -410,8 +391,10 @@ namespace Soundboard
             return returnData;
         }
 
-        private List<Channel> TimeStretchModification(List<Channel> data, double factor)
+        // TODO: Completely broken
+        private void TimeStretchModification(ref List<Channel> data, double factor)
         {
+            double threshold = 0.001;
             if (data.Count <= 0)
             {
                 throw new Exception("Number of channels must be non-zero and non-negative.");
@@ -421,11 +404,120 @@ namespace Soundboard
                 throw new Exception("Time Stretch Factor must be non-negative");
             }
 
-            uint numOutFrames = (uint)Math.Ceiling(checked(data.Count * factor));
+            if (factor > 1 + threshold)
+            {
+                // Assume every channel has the same number of samples
+                uint numOutFrames = (uint)Math.Ceiling(checked(data[0].Count * factor));
+                foreach (var ch in data)
+                {           
+                    while (ch.Count < numOutFrames)
+                    {
+                        ch.Add(new Sample(0f));
+                    }
+                }
+            }
+            else if (factor < 1 - threshold)
+            {
+                // Assume every channel has the same number of samples
+                uint numOutFrames = (uint)Math.Floor(checked(data[0].Count * factor));
+                uint numFramesToRemove = (uint)data[0].Count - numOutFrames;
+                uint stepSize = (uint)data[0].Count / numFramesToRemove;
+            }
+        }
 
+        private void FFT(Channel data, out Complex[] output)
+        {
+            // Find power of 2
+            int power = 1;
+            while ((data.Count / (double)power) > 1)
+            {
+                power *= 2;
+            }
+
+            // Copy input data into complex number form
+            output = new Complex[power];
+            int i = 0;
+            for (; i < data.Count; ++i)
+            {
+                output[i] = new Complex(data[i].ToFloat(), 0);
+            }
+
+            // Zero pad to next power of 2
+            while (i < power)
+            {
+                output[i] = new Complex();
+            }
+            
+            // Call FFT implementation
+            output = FFT_Recursive(output, power, false);
+        }
+        private void IFFT(Complex[] data, out Channel output)
+        {
+            // Check if data length is of power 2
+            double temp = data.Length;
+            while (temp != 1)
+            {
+                if (temp % 2 != 0)
+                    throw new Exception("data length must be a power of 2 in IFFT.");
+                temp /= 2;
+            }
+
+            data = FFT_Recursive(data, data.Length, true);
+            // Copy data over to a channel format
+            output = new Channel();
+            foreach (var complex in data)
+            {
+                output.Add(new Sample((float)complex.Real / data.Length));
+            }
+        }
+
+        /// <summary>
+        /// Recursice part of FFT
+        /// </summary>
+        /// <param name="output"></param>
+        /// <param name="N"></param>
+        /// <param name="stride"></param>
+        private Complex[] FFT_Recursive(Complex[] data, int N, bool inverse)
+        {
+            if (N <= 1)
+            {
+                return data;
+            }
+
+            Complex[] even = new Complex[N / 2];
+            Complex[] odd = new Complex[N / 2];
+            for (int i = 0; i < N / 2; ++i)
+            {
+                even[i] = data[2 * i];
+                odd[i] = data[2 * i + 1];
+            }
+            // Even indexs
+            even = FFT_Recursive(even, N / 2, inverse);
+            // Odd indexs
+            odd = FFT_Recursive(odd, N / 2, inverse);
+
+
+            double EXPONENT = 2 * PI / N;
+            if (!inverse)
+                EXPONENT *= -1;
+            // Combine result
+            for (int k = 0; k < N / 2; ++k)
+            {
+                Complex c = new Complex(Math.Cos(EXPONENT * k), Math.Sin(EXPONENT * k));
+                data[k] = even[k] + c * odd[k];
+                data[k + N / 2] = even[k] - c * odd[k];
+            }
             return data;
         }
 
+        
+
+        /// <summary>
+        /// Discrete Fourier Transform
+        /// </summary>
+        /// <param name="data"></param>
+        /// <param name="samplingFreq"></param>
+        /// <returns></returns>
         private Complex[] DFT(Channel data, int samplingFreq)
         {
             Channel localData = data;
@@ -458,36 +550,111 @@ namespace Soundboard
                 returnData[freqBin] = new Complex(real, imaginary);               
             }
 
-            IDFT(returnData);
             return returnData;            
         }
 
-        private double[] IDFT(Complex[] data)
+        /// <summary>
+        /// Inverse Discrete Fourier Transform
+        /// </summary>
+        /// <param name="data"> The complex numbers to get the inverse from </param>
+        /// <returns> The real numbers in the inverse. </returns>
+        private void IDFT(Complex[] data, out Channel output)
         {
-            double[] returnData = new double[data.Length];
+            output = new Channel();
 
             double EXPONENT = 2 * PI / data.Length;
             for (int sample = 0; sample < data.Length; ++sample)
             {
+                // For our use we don't care about the imaginary part
                 double real = 0;
-                // double imaginary = 0;
                 double constant = EXPONENT * sample;
                 for (int freqBin = 0; freqBin < data.Length; ++freqBin)
                 {
-                    data[freqBin].GetRealPart(out double tempr);
-                    data[freqBin].GetImaginaryPart(out double tempi);
-                    real += tempr * Math.Cos(constant * freqBin) - tempi * Math.Sin(constant * freqBin);
-                    // For our use we don't care about the imaginary part
-                    // imaginary += tempi * Math.Cos(constant * freqBin) + tempr * Math.Sin(constant * freqBin);
+                    real += data[freqBin].Real * Math.Cos(constant * freqBin) - data[freqBin].Imaginary * Math.Sin(constant * freqBin);
                 }
                 real /= data.Length;
-                // imaginary /= data.Length;
 
-                returnData[sample] = real;      
+                output.Add(new Sample((float)real));
             }
-
-            return returnData;
         }
 
+        private void BenchmarkFFT(uint numRepitions = 1)
+        {
+            Console.WriteLine("Beginning FFT Benchmark ========================================================");
+            // Set up data
+            Channel data = new Channel();
+
+            int signalFrequency = 1;
+            int time = 2;
+            int numCycles = time * signalFrequency;
+            int numSamples = 2048;
+            int sampleRate = numSamples / time;
+
+            for (int i = 0; i < numSamples; ++i)
+            {
+                data.Add(new Sample((float)Math.Sin(i * (numCycles * 2 * PI / numSamples))));
+            }
+
+            // Warm up
+            FFT(data, out Complex[] temp);
+            temp = DFT(data, 44100);
+
+            long FFT_Time = 0;
+            long DFT_Time = 0;
+            for (uint rep = 0; rep < numRepitions; ++rep)
+            {
+                // FFT
+                Stopwatch sw = Stopwatch.StartNew();
+                FFT(data, out Complex[] frequencies);
+                sw.Stop();
+                FFT_Time += sw.ElapsedMilliseconds;
+                Console.WriteLine("FFT took {0} ms.", sw.ElapsedMilliseconds);
+                for (int i = 0; i < numSamples / 2; ++i)
+                {
+                    Console.Write("Frequency: {0} " + frequencies[i].Magnitude() + " ", (double)i * sampleRate / numSamples);
+                }
+                Console.WriteLine();
+
+
+                // DFT
+                sw = Stopwatch.StartNew();
+                frequencies = DFT(data, 44100);
+                sw.Stop();
+                DFT_Time += sw.ElapsedMilliseconds;
+                Console.WriteLine("DFT took {0} ms.", sw.ElapsedMilliseconds);
+                for (int i = 0; i < numSamples / 2; ++i)
+                {
+                    Console.Write("Frequency: {0} " + frequencies[i].Magnitude() + " ", (double)i * sampleRate / numSamples);
+                }
+                Console.WriteLine("\n=======================================================");
+            }
+            Console.WriteLine("Average Time FFT {0}\nAverage Time DFT {1}\n===================================================================", FFT_Time / numRepitions, DFT_Time / numRepitions);
+
+        }
+        private void PrintChannel(Channel data)
+        {
+            foreach (var sample in data)
+            {
+                Console.Write("{0}, ", sample.ToFloat());
+            }
+            Console.WriteLine();
+        }
+        private void PrintHighestFrequency(ref Complex[] data, int samplingRate)
+        {
+            double max = data[0].Magnitude();
+            int index = 0;
+            for (int i = 1; i < data.Length / 2; ++i)
+            {
+                if (max < data[i].Real)
+                {
+                    max = data[i].Real;
+                    index = i;
+                }
+            }
+
+            // Only show frequencies that contain atleast 1/1000 power
+            if (max / data.Length > 0.001)
+                Console.WriteLine("Highest Frequency is {0} at {1} Hz (Frequency step size is {2} Hz) index {3}", max, (double)index * samplingRate / data.Length, (double)samplingRate / data.Length, index);
+        }
     }
 }

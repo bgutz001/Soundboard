@@ -5,7 +5,8 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:Soundboard"
         mc:Ignorable="d"
-        Title="Soundboard" Height="450" Width="800">
+        Title="Soundboard" Height="450" Width="600"
+        x:Name="Root_Window" MinWidth="600" MinHeight="450">
     <Window.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
@@ -13,11 +14,19 @@
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Window.Resources>
-    <Grid>
-        <TextBox x:Name="txtMicrophone" Text="Microphones" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="16,16,0,0" Width="248" TextAlignment="Center" FontWeight="Bold" />
-        <ListBox x:Name="lbMicrophones" HorizontalAlignment="Left" Margin="16,34,0,0" VerticalAlignment="Top" Height="124" Width="248" SelectionMode="Single" ItemContainerStyle="{StaticResource mListBoxStyle}"/>
-        <TextBox x:Name="txtSpeakers" Text="Speakers" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="16,174,0,0" Width="248" TextAlignment="Center" FontWeight="Bold" />
-        <ListBox x:Name="lbSpeakers" HorizontalAlignment="Left" Margin="16,192,0,0" VerticalAlignment="Top" Height="124" Width="248" SelectionMode="Single" ItemContainerStyle="{StaticResource mListBoxStyle}"/>
-        <Button x:Name="btnCapture" HorizontalAlignment="Left" VerticalAlignment="Top" Width="128" Height="32" Margin="304,34,0,0" Content="Start Capture" />
+
+    <Grid x:Name="grid" ScrollViewer.VerticalScrollBarVisibility="Auto" Width="{Binding ActualWidth, ElementName=Root_Window, Mode=OneWay}" Height="{Binding ActualHeight, ElementName=Root_Window, Mode=OneWay}">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="2*"/>
+            <ColumnDefinition/>
+        </Grid.ColumnDefinitions>
+        <DockPanel x:Name="dockPanel" LastChildFill="False" HorizontalAlignment="Center" VerticalAlignment="Top" Width="300">
+            <Label x:Name="lblMicrophones" Content="Microphones" Margin="16,16,16,0" VerticalAlignment="Top" FontWeight="Bold" BorderBrush="Gray" BorderThickness="1px" DockPanel.Dock="Top" HorizontalContentAlignment="Center" Width="{Binding ActualWidth, ElementName=cmbMicrophones, Mode=OneWay}" HorizontalAlignment="Left" Padding="5,2"/>
+            <ComboBox x:Name="cmbMicrophones" Margin="16,8,16,0" VerticalAlignment="Top" SelectionChanged="MicrophoneSelectionChanged" DockPanel.Dock="Top" Width="auto" HorizontalContentAlignment="Center"/>
+            <Label x:Name="lblSpeakers" Content="Speakers" Margin="16,16,16,0" VerticalAlignment="Top" FontWeight="Bold" BorderBrush="Gray" BorderThickness="1px" DockPanel.Dock="Top" HorizontalContentAlignment="Center" Width="{Binding ActualWidth, ElementName=cmbMicrophones, Mode=OneWay}" HorizontalAlignment="Left" Padding="5,2" Grid.IsSharedSizeScope="True"/>
+            <ComboBox x:Name="cmbSpeakers" Margin="16,8,16,0" VerticalAlignment="Top" SelectionChanged="SpeakerSelectionChanged" DockPanel.Dock="Top" HorizontalContentAlignment="Center"/>
+        </DockPanel>
+        <Button x:Name="btnCapture" Width="128" Height="32" Margin="16,16,16,16" Content="Start Capture" Click="CaptureClick" Grid.Column="2" VerticalAlignment="Top"/>
+        <Slider x:Name="slider" Margin="16,200,0,0" VerticalAlignment="Top" Maximum="2" Minimum="0.1" TickFrequency="0.1" TickPlacement="BottomRight" Width="300" Foreground="Black" HorizontalContentAlignment="Center" IsSnapToTickEnabled="True" Value="{Binding Path=PitchFactor, Mode=TwoWay}" ValueChanged="PitchFactorChanged" LargeChange="0.5"/>
     </Grid>
 </Window>

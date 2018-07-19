@@ -27,49 +27,50 @@ namespace Soundboard
 
         public MainWindow()
         {
+            DataContext = this;
             InitializeComponent();
-
+            
             audioProcessor = new Audio();
+            this.slider.DataContext = audioProcessor;
             microphones = new List<MMDevice>();
             speakers = new List<MMDevice>();
-            // Register selection changed event handler
-            this.lbMicrophones.SelectionChanged += MicrophoneSelectionChanged;
-            this.lbSpeakers.SelectionChanged += SpeakerSelectionChanged;
-            this.btnCapture.Click += CaptureClick;
-
 
             // Fill microphone list
             audioProcessor.GetMicrophones(microphones);
             foreach (var i in microphones)
             {
-                this.lbMicrophones.Items.Add(i.DeviceFriendlyName);
-                this.lbMicrophones.SelectedIndex = 0;
+                this.cmbMicrophones.Items.Add(i.DeviceFriendlyName);
+                this.cmbMicrophones.SelectedIndex = 0;
             }
 
             // Fill speakers list
             audioProcessor.GetSpeakers(speakers);
             foreach (var i in speakers)
             {
-                this.lbSpeakers.Items.Add(i.DeviceFriendlyName);
-                this.lbSpeakers.SelectedIndex = 0;
+                this.cmbSpeakers.Items.Add(i.DeviceFriendlyName);
+                this.cmbSpeakers.SelectedIndex = 0;
             }
         }
 
-        void MicrophoneSelectionChanged(object sender, EventArgs e)
+        void MicrophoneSelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            Console.WriteLine("INFO: Microphone selection changed index = " + ((ListBox)sender).SelectedIndex.ToString());
-            audioProcessor.SetMicrophone(microphones.ElementAt(((ListBox)sender).SelectedIndex));
+            ComboBox cb = sender as ComboBox;
+            Console.WriteLine("INFO: Microphone selection changed index = " + cb.SelectedIndex.ToString());
+            audioProcessor.SetMicrophone(microphones.ElementAt(cb.SelectedIndex));
+            e.Handled = true;
         }
-        void SpeakerSelectionChanged(object sender, EventArgs e)
+        void SpeakerSelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            Console.WriteLine("INFO: Speaker selection changed index = " + ((ListBox)sender).SelectedIndex.ToString());
-            audioProcessor.SetSpeaker(speakers.ElementAt(((ListBox)sender).SelectedIndex));
+            ComboBox cb = sender as ComboBox;
+            Console.WriteLine("INFO: Speaker selection changed index = " + cb.SelectedIndex.ToString());
+            audioProcessor.SetSpeaker(speakers.ElementAt(cb.SelectedIndex));
+            e.Handled = true;
         }
 
-        void CaptureClick(object sender, EventArgs e)
+        void CaptureClick(object sender, RoutedEventArgs e)
         {
             Console.WriteLine("INFO: Capture clicked");
-            Button btn = (Button) sender;
+            Button btn = sender as Button;
             if (btn.Content.Equals("Start Capture"))
             {
                 btn.Content = "Stop Capture";
@@ -80,8 +81,12 @@ namespace Soundboard
                 btn.Content = "Start Capture";
                 audioProcessor.StopCapture();
             }
-            
+            e.Handled = true;
         }
 
+        void PitchFactorChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            e.Handled = true;
+        }
     }
 }
