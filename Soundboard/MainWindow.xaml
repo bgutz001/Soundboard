@@ -4,6 +4,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:Soundboard"
+        xmlns:control="clr-namespace:Soundboard.Controls"
         mc:Ignorable="d"
         Title="Soundboard" Height="450" Width="600"
         x:Name="Root_Window" MinWidth="600" MinHeight="450">
@@ -25,8 +26,13 @@
             <ComboBox x:Name="cmbMicrophones" Margin="16,8,16,0" VerticalAlignment="Top" SelectionChanged="MicrophoneSelectionChanged" DockPanel.Dock="Top" Width="auto" HorizontalContentAlignment="Center"/>
             <Label x:Name="lblSpeakers" Content="Speakers" Margin="16,16,16,0" VerticalAlignment="Top" FontWeight="Bold" BorderBrush="Gray" BorderThickness="1px" DockPanel.Dock="Top" HorizontalContentAlignment="Center" Width="{Binding ActualWidth, ElementName=cmbMicrophones, Mode=OneWay}" HorizontalAlignment="Left" Padding="5,2" Grid.IsSharedSizeScope="True"/>
             <ComboBox x:Name="cmbSpeakers" Margin="16,8,16,0" VerticalAlignment="Top" SelectionChanged="SpeakerSelectionChanged" DockPanel.Dock="Top" HorizontalContentAlignment="Center"/>
+            <Slider x:Name="slider" Margin="16,32,0,0" VerticalAlignment="Top" Maximum="2" Minimum="0.1" TickFrequency="0.1" TickPlacement="BottomRight"
+                    Foreground="Black" HorizontalContentAlignment="Center" IsSnapToTickEnabled="True" Value="{Binding Path=PitchFactor, Mode=TwoWay}"
+                    ValueChanged="PitchFactorChanged" LargeChange="0.5" Width="268"/>
         </DockPanel>
         <Button x:Name="btnCapture" Width="128" Height="32" Margin="16,16,16,16" Content="Start Capture" Click="CaptureClick" Grid.Column="2" VerticalAlignment="Top"/>
-        <Slider x:Name="slider" Margin="16,200,0,0" VerticalAlignment="Top" Maximum="2" Minimum="0.1" TickFrequency="0.1" TickPlacement="BottomRight" Width="300" Foreground="Black" HorizontalContentAlignment="Center" IsSnapToTickEnabled="True" Value="{Binding Path=PitchFactor, Mode=TwoWay}" ValueChanged="PitchFactorChanged" LargeChange="0.5"/>
+        <control:LineGraph x:Name="grphFreq" DockPanel.Dock="Top" Margin="0,254,0,0" Width="200" Height="200" VerticalAlignment="Top" BorderBrush="Black" BorderThickness="1px"
+                           XData="{Binding GraphXData, Mode=TwoWay}" YData="{Binding GraphYData, Mode=TwoWay}" />
+        
     </Grid>
 </Window>

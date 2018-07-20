@@ -27,13 +27,15 @@ namespace Soundboard
 
         public MainWindow()
         {
-            DataContext = this;
             InitializeComponent();
-            
+            DataContext = this;       
+
             audioProcessor = new Audio();
             this.slider.DataContext = audioProcessor;
+            this.grphFreq.DataContext = audioProcessor;
+
             microphones = new List<MMDevice>();
-            speakers = new List<MMDevice>();
+            speakers = new List<MMDevice>();    
 
             // Fill microphone list
             audioProcessor.GetMicrophones(microphones);

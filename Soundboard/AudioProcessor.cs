@@ -9,6 +9,8 @@ using NAudio.CoreAudioApi;
 using NAudio.Dmo;
 using NAudio.Wave;
 using System.Diagnostics;
+using System.Windows.Media;
+using System.Collections.ObjectModel;
 
 namespace Soundboard
 {
@@ -127,7 +129,9 @@ namespace Soundboard
         private Guid audioSession;
 
         public double PitchFactor { get; set; }
-        
+        public ObservableCollection<double> GraphXData { get; set; }
+        public ObservableCollection<double> GraphYData { get; set; }
+
         public Audio()
         {
             deviceEnumerator = new MMDeviceEnumerator();
@@ -140,6 +144,13 @@ namespace Soundboard
             speakFrameSize = 0;
             audioSession = new Guid();
             PitchFactor = 1;
+            GraphXData = new ObservableCollection<double>();
+            GraphYData = new ObservableCollection<double>();
+
+            GraphXData.Add(1);
+            GraphYData.Add(1);
+            GraphXData.Add(1);
+            GraphYData.Add(1);
         }
 
         public void GetMicrophones(List<MMDevice> deviceNames)
@@ -194,6 +205,7 @@ namespace Soundboard
             speakAudioClient.Start();
 
             BenchmarkFFT(1);
+            GraphXData.Add(1);
 
             cancelTokenSource = new CancellationTokenSource();
             captureTask = new Task(GetCaptureData, cancelTokenSource.Token);
@@ -278,7 +290,7 @@ namespace Soundboard
 
                     FFT(processData, out Complex[] frequencies);
 
-                    PrintHighestFrequency(ref frequencies, micAudioClient.MixFormat.SampleRate);
+                    PrintPeakFrequencies(ref frequencies, micAudioClient.MixFormat.SampleRate);
 
                     IFFT(frequencies, out Channel IFFTsamples);
 
@@ -639,22 +651,42 @@ namespace Soundboard
             }
             Console.WriteLine();
         }
-        private void PrintHighestFrequency(ref Complex[] data, int samplingRate)
+        private void PrintPeakFrequencies(ref Complex[] data, int samplingRate)
         {
+            List<double> peaks = new List<double>();
+            List<int> peakindex = new List<int>();
+
             double max = data[0].Magnitude();
             int index = 0;
+            bool foundpeak = false;
+            double threshold = 0.001; // Only show peaks that contain atleast 1/1000 power
+
             for (int i = 1; i < data.Length / 2; ++i)
             {
-                if (max < data[i].Real)
+                if (max < data[i].Magnitude() && (data[i].Magnitude() / data.Length) > threshold)
                 {
-                    max = data[i].Real;
+                    max = data[i].Magnitude();
+                    foundpeak = true;
                     index = i;
                 }
-            }
 
-            // Only show frequencies that contain atleast 1/1000 power
-            if (max / data.Length > 0.001)
-                Console.WriteLine("Highest Frequency is {0} at {1} Hz (Frequency step size is {2} Hz) index {3}", max, (double)index * samplingRate / data.Length, (double)samplingRate / data.Length, index);
+                if (foundpeak && (data[i].Magnitude() / data.Length) < 0.0001) // Close to zero so the peak has ended
+                {
+                    foundpeak = false;
+                    peaks.Add(max);
+                    peakindex.Add(index);
+                    max = 0;
+                }
+
+            }
+            
+            // Print
+            for (int i = 0; i < peaks.Count; ++i)
+            {
+                Console.WriteLine("Frequency Peak {0} found at {1} Hz (Frequency step size is {2} Hz)", peaks[i], (double)peakindex[i] * samplingRate / data.Length, (double)samplingRate / data.Length);
+            }
+            if (peaks.Count != 0)
+                Console.WriteLine("==============================================================");
         }
     }
 }
