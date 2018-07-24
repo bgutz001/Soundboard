@@ -83,20 +83,21 @@ namespace Soundboard
         {
             return new Complex((a.Real * b.Real - a.Imaginary * b.Imaginary), (a.Real * b.Imaginary + a.Imaginary * b.Real));
         }
-
+        public static Complex operator *(Complex a, double b)
+        {
+            return new Complex((a.Real * b), (a.Imaginary * b));
+        }
         public static Complex operator +(Complex a, Complex b)
         {
             return new Complex((a.Real + b.Real), (a.Imaginary + b.Imaginary));
         }
-
         public static Complex operator -(Complex a, Complex b)
         {
             return new Complex((a.Real - b.Real), (a.Imaginary - b.Imaginary));
         }
-
         public override string ToString()
         {
-            return ("Real: " + Real + " Imaginary: " + Imaginary);
+            return String.Format("Real: {0,8:0.0000} Imaginary: {1,8:0.0000}", Real, Imaginary);
         }
         public double Magnitude()
         {
@@ -112,7 +113,7 @@ namespace Soundboard
     public class Audio
     {
         private static readonly double PI = 3.14159265259;
-        private static readonly int NUM_SAMPLES_TO_PROCESS = 4096; // The nummber of sample to wait for before processing
+        private static readonly int NUM_SAMPLES_TO_PROCESS = 1024; // The nummber of sample to wait for before processing
 
         private MMDeviceEnumerator deviceEnumerator;
         private MMDevice microphone;
@@ -204,8 +205,7 @@ namespace Soundboard
             micAudioClient.Start();
             speakAudioClient.Start();
 
-            BenchmarkFFT(1);
-            GraphXData.Add(1);
+            //BenchmarkFFT(10);
 
             cancelTokenSource = new CancellationTokenSource();
             captureTask = new Task(GetCaptureData, cancelTokenSource.Token);
@@ -271,6 +271,8 @@ namespace Soundboard
                     }
 
                     // Process audio ===========================================================================================================
+                    Stopwatch sw = new Stopwatch();
+                    sw.Start();
 
                     // Only process the first NUM_SAMPLES_TO_PROCESS
                     List<Channel> speakData = new List<Channel>();
@@ -287,16 +289,20 @@ namespace Soundboard
                     speakData = ModifyChannels(speakData, 1);
                     Channel processData = speakData[0];
 
+                    //processData = PitchShift(processData, 4100);
+                    processData = PitchScale(processData, 2);
 
-                    FFT(processData, out Complex[] frequencies);
+                    //FFT(processData, out Complex[] frequencies);
+                    //PrintPeakFrequencies(ref frequencies, micAudioClient.MixFormat.SampleRate);
+                    //IFFT(frequencies, out Channel IFFTsamples);
 
-                    PrintPeakFrequencies(ref frequencies, micAudioClient.MixFormat.SampleRate);
-
-                    IFFT(frequencies, out Channel IFFTsamples);
 
                     // Modify Speaker data to correct number of channels
                     speakData[0] = processData;
                     speakData = ModifyChannels(speakData, speakAudioClient.MixFormat.Channels);
+
+                    sw.Stop();
+                    Console.WriteLine("Processing took {0} ms.", sw.ElapsedMilliseconds);
 
                     // Write data ====================================================================================================================
                     int framesRequested = speakData.ElementAt(0).Count;
@@ -322,6 +328,12 @@ namespace Soundboard
             }
         }
 
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="data"></param>
+        /// <param name="numSamples"></param>
+        /// <returns></returns>
         private List<Channel> Resample(List<Channel> data, uint numSamples)
         {
             if (numSamples == 0)
@@ -403,6 +415,123 @@ namespace Soundboard
             return returnData;
         }
 
+        /// <summary>
+        /// Shifts frequency bins over by a certain number of bins
+        /// </summary>
+        /// <param name="data">The channel data in which you want to frequency shift</param>
+        /// <param name="shift">The number of frequency bins to shift over</param>
+        /// <returns>The channel data that has been shifted</returns>
+        private Channel PitchShift(Channel data, int shift)
+        {
+            int half = data.Count / 2;
+            // Convert negative shift factor 
+            if (shift < 0)                
+                shift = half + shift;
+
+            // Make sure shift isn't too large
+            shift %= half;
+
+            Console.WriteLine(shift);
+            if (shift == 0)
+                return data;
+
+            // Get frequencies
+            FFT(data, out Complex[] frequencies);
+            Complex[] shiftedFrequencies = new Complex[frequencies.Length];
+
+            // shift overflow portion
+            for (int i = 0; i < shift; ++i)
+            {
+                // Shift left side of frequencies
+                shiftedFrequencies[i] = frequencies[half - shift + i];
+                // Shift right side of frequencies
+                shiftedFrequencies[half + i] = frequencies[frequencies.Length - shift - 1];
+            }
+
+            // shift rest
+            for (int i = shift; i < half; ++i)
+            {
+                // Shift left side of frequencies
+                shiftedFrequencies[i] = frequencies[i - shift];
+                // Shift right side of frequencies
+                shiftedFrequencies[half + i] = frequencies[half + i - shift];
+            }
+
+            // Get data
+            IFFT(shiftedFrequencies, out Channel output);
+
+            return output;
+        }
+
+        private Channel PitchScale(Channel data, double factor)
+        {
+            int half = data.Count / 2;
+
+            if (factor <= 0)
+            {
+                throw new Exception("Cannot scale pitch by a factor less than or equal to zero.");
+            }
+            //if (factor == 1)
+            //{
+            //    return data;
+            //}
+
+            Stopwatch sw = new Stopwatch();
+            sw.Start();
+            // Get frequencies
+            FFT(data, out Complex[] frequencies);
+            Complex[] shiftedFrequencies = new Complex[frequencies.Length];
+            for (int i = 0; i < shiftedFrequencies.Length; ++i)
+                shiftedFrequencies[i] = frequencies[i];
+
+            sw.Stop();
+            Console.WriteLine("Took {0} ms to get frequencies.", sw.ElapsedMilliseconds);
+
+            // scale frequencies
+            if (factor >= 1)
+            {
+                sw.Restart();
+                for (int i = 0; i < half; ++i)
+                {
+                    // scale left side of frequencies
+                    // Get the high and low indexs and interpolate between them
+                    double index = i / factor;
+                    int high = (int)Math.Ceiling(index);
+                    int low = (int)Math.Floor(index);
+                    Complex slope = frequencies[high] - frequencies[low];
+                    Complex temp = slope * (index - low) + frequencies[low];
+                    shiftedFrequencies[i] = temp;
+
+                    // scale right side of frequencies
+                    index += half;
+                    high = (int)Math.Ceiling(index);
+                    low = (int)Math.Floor(index);
+                    slope = frequencies[high] - frequencies[low];
+                    temp = slope * (index - low) + frequencies[low];
+                    shiftedFrequencies[i + half] = temp;
+                }
+                sw.Stop();
+                Console.WriteLine("Took {0} ms to scale frequencies.", sw.ElapsedMilliseconds);
+            }
+            else
+            {
+                //tODO
+            }
+
+            //for (int i = 0; i < shiftedFrequencies.Length; ++i)
+            //{
+            //    Console.WriteLine("Index: {0} Old: {1} \t\t New: {2}", i, frequencies[i].ToString(), shiftedFrequencies[i].ToString());
+            //}
+
+            sw.Restart();
+            // Get data
+            IFFT(shiftedFrequencies, out Channel output);
+            sw.Stop();
+            Console.WriteLine("Took {0} ms to get data.", sw.ElapsedMilliseconds);
+
+            return output;
+        }
+
         // TODO: Completely broken
         private void TimeStretchModification(ref List<Channel> data, double factor)
         {
@@ -479,7 +608,7 @@ namespace Soundboard
             output = new Channel();
             foreach (var complex in data)
             {
-                output.Add(new Sample((float)complex.Real / data.Length));
+                output.Add(new Sample((float)(complex.Real / data.Length)));
             }
         }
 
@@ -589,7 +718,6 @@ namespace Soundboard
                 output.Add(new Sample((float)real));
             }
         }
-
         private void BenchmarkFFT(uint numRepitions = 1)
         {
             Console.WriteLine("Beginning FFT Benchmark ========================================================");
@@ -643,6 +771,7 @@ namespace Soundboard
             Console.WriteLine("Average Time FFT {0}\nAverage Time DFT {1}\n===================================================================", FFT_Time / numRepitions, DFT_Time / numRepitions);
 
         }
+
         private void PrintChannel(Channel data)
         {
             foreach (var sample in data)
